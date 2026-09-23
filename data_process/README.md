@@ -11,6 +11,8 @@
 | `analyze_f1_data_quality.py` | 独立数据质量评估，不生成 LeRobot 数据 |
 | `clean_f1_mcap.py` | 单条/批量 MCAP 头相机时间戳清洗入口 |
 | `cleaning.py` | 局部插值、鲁棒帧序号回归、逐帧风险记录和 MCAP 等长补丁 |
+| `detect_f1_objects.py` | 头相机开放词汇检测入口，默认读取 `1000000.mp4` 输出检测框视频和 JSON 报告 |
+| `detection.py` | 检测算子抽象：帧源、YOLOE 检测器、视频/报告 sink，便于后续接 MCAP 和下游处理 |
 | `mcap.py` | 按 MCAP 记录顺序读取 Header、publish time、log time 和 CDR 字节偏移 |
 | `default_config.toml` | 质检、时间戳清洗和转换默认门限 |
 | `DATA_QUALITY_GUIDE.md` | 质量指标、风险门限和报告解读说明 |
@@ -358,6 +360,39 @@ artifacts/f1_conversion_reports/<UTC时间>_<repo_id>/
 ### 9.3 头相机时间戳修复
 
 若图像 Header 存在重复或倒退，工具使用 Episode 首尾时间和帧序号构建单调均匀时间轴，并在报告中记录：
+
+## 10. 头相机开放检测
+
+第一版检测工具直接读取头相机导出的视频文件 `1000000.mp4`，调用 conda `yoloe` 环境里安装的
+Ultralytics YOLOE 做开放词汇检测，默认目标是纸箱和机器人手臂，并输出：
+
+- 带实时检测框的视频：`artifacts/f1_detection/1000000_detected.mp4`
+- 机器可读检测报告：`artifacts/f1_detection/1000000_detection_report.json`
+
+运行方式：
+
+```bash
+conda activate yoloe
+python -m data_process.detect_f1_objects
+```
+
+常用参数示例：
+
+```bash
+python -m data_process.detect_f1_objects \
+  --input-video /path/to/1000000.mp4 \
+  --class-prompts "cardboard box" "robot arm" \
+  --confidence 0.2 \
+  --device cuda:0
+```
+
+当前实现把检测流程拆成了三层，便于后续扩展到原始 MCAP 和下游算子：
+
+1. `VideoFrameSource`：负责逐帧提供视频帧；
+2. `UltralyticsYOLOEDetector`：负责开放词汇检测；
+3. `AnnotatedVideoSink` / `JsonReportSink`：分别负责输出标注视频和结构化检测结果。
+
+后续如果需要直接检测原始 MCAP，只需要新增一个 `FrameSource` 实现，把头相机帧喂给同一个检测器和 sink。
 
 - 原始非递增次数；
 - 修复方法；
