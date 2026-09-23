@@ -256,11 +256,12 @@ def run_detection_pipeline(
     *,
     max_frames: int | None = None,
 ) -> dict[str, Any]:
-    for sink in sinks:
-        sink.open(source.metadata)
-
+    opened_sinks: list[DetectionSink] = []
     processed_frames = 0
     try:
+        for sink in sinks:
+            sink.open(source.metadata)
+            opened_sinks.append(sink)
         for frame in source.frames():
             if max_frames is not None and processed_frames >= max_frames:
                 break
@@ -270,7 +271,7 @@ def run_detection_pipeline(
             processed_frames += 1
     finally:
         source.close()
-        for sink in sinks:
+        for sink in reversed(opened_sinks):
             sink.close()
 
     return {
