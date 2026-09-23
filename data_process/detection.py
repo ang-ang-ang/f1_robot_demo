@@ -157,7 +157,7 @@ class UltralyticsYOLOEDetector:
             xyxy_values = boxes.xyxy.detach().cpu().tolist()
             confidence_values = boxes.conf.detach().cpu().tolist()
             class_indices = boxes.cls.detach().cpu().tolist()
-            for xyxy, confidence, class_index in zip(xyxy_values, confidence_values, class_indices, strict=True):
+            for xyxy, confidence, class_index in zip(xyxy_values, confidence_values, class_indices):
                 label = _resolve_label(names, int(class_index))
                 detections.append(
                     Detection(
