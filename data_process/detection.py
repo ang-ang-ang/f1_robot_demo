@@ -212,7 +212,7 @@ class AnnotatedVideoSink:
             self._writer = writer
             self._frame_size = frame_size
         elif frame_size != self._frame_size:
-            raise ValueError(f"标注后视频帧尺寸发生变化：{frame_size} != {self._frame_size}")
+            raise ValueError(f"标注输出帧尺寸不一致：{frame_size} != {self._frame_size}")
         self._writer.write(annotated_bgr)
 
     def close(self) -> None:
