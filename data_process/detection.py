@@ -146,9 +146,16 @@ class UltralyticsYOLOEDetector:
         }
         if self._device is not None:
             predict_kwargs["device"] = self._device
-        results = self._model.predict(
-            **predict_kwargs,
-        )
+        results = self._model.predict(**predict_kwargs)
+        if not results:
+            return (
+                FrameDetections(
+                    frame_index=frame.index,
+                    timestamp_s=frame.timestamp_s,
+                    detections=(),
+                ),
+                frame.image_bgr.copy(),
+            )
         result = results[0]
         names = result.names or {}
         detections: list[Detection] = []
