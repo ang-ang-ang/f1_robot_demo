@@ -181,24 +181,31 @@ class AnnotatedVideoSink:
     def __init__(self, output_path: Path, fourcc: str = "mp4v") -> None:
         self.output_path = output_path
         self.fourcc = fourcc
+        self._fps = 20.0
+        self._frame_size: tuple[int, int] | None = None
         self._writer: cv2.VideoWriter | None = None
 
     def open(self, metadata: VideoMetadata) -> None:
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        writer = cv2.VideoWriter(
-            str(self.output_path),
-            cv2.VideoWriter_fourcc(*self.fourcc),
-            metadata.fps if metadata.fps > 0 else 20.0,
-            (metadata.width, metadata.height),
-        )
-        if not writer.isOpened():
-            raise RuntimeError(f"无法创建输出视频：{self.output_path}")
-        self._writer = writer
+        self._fps = metadata.fps if metadata.fps > 0 else 20.0
 
     def write(self, frame: FramePacket, detections: FrameDetections, annotated_bgr: np.ndarray) -> None:
         del frame, detections
+        height, width = annotated_bgr.shape[:2]
+        frame_size = (width, height)
         if self._writer is None:
-            raise RuntimeError("输出视频尚未初始化")
+            writer = cv2.VideoWriter(
+                str(self.output_path),
+                cv2.VideoWriter_fourcc(*self.fourcc),
+                self._fps,
+                frame_size,
+            )
+            if not writer.isOpened():
+                raise RuntimeError(f"无法创建输出视频：{self.output_path}")
+            self._writer = writer
+            self._frame_size = frame_size
+        elif frame_size != self._frame_size:
+            raise ValueError(f"标注后视频帧尺寸发生变化：{frame_size} != {self._frame_size}")
         self._writer.write(annotated_bgr)
 
     def close(self) -> None:
@@ -238,7 +245,7 @@ class JsonReportSink:
             },
             "frames": self._frames,
         }
-        self.output_path.write_text(json.dumps(report, indent=2, ensure_ascii=False))
+        self.output_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def run_detection_pipeline(
