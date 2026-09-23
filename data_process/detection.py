@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from collections import Counter
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -60,7 +61,7 @@ class FrameDetections:
 class FrameSource(Protocol):
     metadata: VideoMetadata
 
-    def frames(self) -> Any:
+    def frames(self) -> Iterator[FramePacket]:
         """Yield frame packets in timestamp order."""
 
     def close(self) -> None:
@@ -97,7 +98,7 @@ class VideoFrameSource:
             frame_count=raw_frame_count if raw_frame_count > 0 else None,
         )
 
-    def frames(self) -> Any:
+    def frames(self) -> Iterator[FramePacket]:
         index = 0
         fps = self.metadata.fps if self.metadata.fps > 0 else 20.0
         while True:
@@ -137,12 +138,16 @@ class UltralyticsYOLOEDetector:
         self._device = device
 
     def detect(self, frame: FramePacket) -> tuple[FrameDetections, np.ndarray]:
+        predict_kwargs = {
+            "source": frame.image_bgr,
+            "conf": self._confidence,
+            "iou": self._iou,
+            "verbose": False,
+        }
+        if self._device is not None:
+            predict_kwargs["device"] = self._device
         results = self._model.predict(
-            source=frame.image_bgr,
-            conf=self._confidence,
-            iou=self._iou,
-            device=self._device,
-            verbose=False,
+            **predict_kwargs,
         )
         result = results[0]
         names = result.names or {}
