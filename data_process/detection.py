@@ -245,7 +245,8 @@ class JsonReportSink:
             },
             "frames": self._frames,
         }
-        self.output_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+        with self.output_path.open("w", encoding="utf-8") as handle:
+            json.dump(report, handle, indent=2, ensure_ascii=False)
 
 
 def run_detection_pipeline(
