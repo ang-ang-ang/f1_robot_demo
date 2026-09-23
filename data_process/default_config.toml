@@ -1,0 +1,51 @@
+[quality.timestamp]
+duplicate_epsilon_ms = 0.05
+normal_period_tolerance_ratio = 0.20
+gap_warning_factor = 2.2
+gap_fail_factor = 5.0
+image_gap_floor_ms = 70.0
+state_gap_floor_ms = 45.0
+action_gap_floor_ms = 120.0
+log_publish_latency_warning_ms = 100.0
+
+[quality.cross_stream]
+target_fps = 20
+max_image_residual_ms = 40.0
+max_state_residual_ms = 20.0
+max_action_residual_ms = 60.0
+max_start_end_skew_ms = 500.0
+
+[quality.joint_motion]
+max_state_step_deg = 15.0
+max_action_step_deg = 25.0
+max_state_velocity_deg_s = 300.0
+max_action_velocity_deg_s = 500.0
+max_acceleration_deg_s2 = 5000.0
+max_tracking_p95_deg = 10.0
+
+[quality.image]
+decode_samples_per_topic = 12
+hash_samples_per_topic = 40
+max_sampled_identical_ratio = 0.20
+
+[cleaning.head_timestamp]
+topic = "/camera/head/color/image_raw/compressed"
+nominal_period_ms = 0.0
+period_search_min_ms = 25.0
+period_search_max_ms = 50.0
+normal_step_tolerance_ratio = 0.20
+anchor_residual_tolerance_periods = 0.35
+local_anchor_tolerance_ratio = 0.30
+short_run_max_frames = 6
+warning_correction_periods = 1.0
+high_risk_correction_periods = 2.0
+minimum_anchor_count = 20
+
+[conversion]
+fps = 20
+max_image_delta_ms = 40.0
+max_state_delta_ms = 20.0
+max_action_delta_ms = 60.0
+max_action_step_deg = 25.0
+gripper_scale = 100.0
+

@@ -1,23 +1,23 @@
-# ruff: noqa: RUF001, SLF001
+# ruff: noqa: BLE001, RUF001, SLF001
 """Generate detailed quality reports for one or more F1 MCAP episodes."""
 
 from __future__ import annotations
 
-from collections import Counter
-from contextlib import ExitStack
 import csv
 import dataclasses
-from datetime import UTC
-from datetime import datetime
 import hashlib
 import json
+from collections import Counter
+from contextlib import ExitStack
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO, Literal
 
-import convert_f1_mcap_to_lerobot as converter
 import cv2
 import numpy as np
 import tyro
+
+from data_process import convert_f1_mcap_to_lerobot as converter
 
 
 @dataclasses.dataclass(frozen=True)
@@ -40,7 +40,7 @@ class Args:
     gripper_scale: float = 100.0
 
     max_image_delta_ms: float = 40.0
-    max_state_delta_ms: float = 15.0
+    max_state_delta_ms: float = 20.0
     max_action_delta_ms: float = 60.0
     max_action_step_deg: float = 25.0
     max_image_gap_ms: float = 70.0

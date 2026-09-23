@@ -20,17 +20,16 @@ without writing a LeRobot dataset.
 
 from __future__ import annotations
 
-from contextlib import ExitStack
 import dataclasses
-from datetime import UTC
-from datetime import datetime
 import functools
 import json
 import math
-from pathlib import Path
 import shutil
 import struct
 import subprocess
+from contextlib import ExitStack
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import BinaryIO, Literal
 
 import cv2
@@ -107,7 +106,7 @@ class Args:
     max_image_delta_ms: float = 40.0
     """Maximum nearest-image timestamp residual allowed at an output frame."""
 
-    max_state_delta_ms: float = 15.0
+    max_state_delta_ms: float = 20.0
     """Maximum nearest-state timestamp residual allowed at an output frame."""
 
     max_action_delta_ms: float = 60.0

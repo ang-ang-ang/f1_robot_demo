@@ -9,6 +9,10 @@
 | --- | --- |
 | `convert_f1_mcap_to_lerobot.py` | 单条/批量 MCAP 转 LeRobot，自动保存每次转换报告 |
 | `analyze_f1_data_quality.py` | 独立数据质量评估，不生成 LeRobot 数据 |
+| `clean_f1_mcap.py` | 单条/批量 MCAP 头相机时间戳清洗入口 |
+| `cleaning.py` | 局部插值、鲁棒帧序号回归、逐帧风险记录和 MCAP 等长补丁 |
+| `mcap.py` | 按 MCAP 记录顺序读取 Header、publish time、log time 和 CDR 字节偏移 |
+| `default_config.toml` | 质检、时间戳清洗和转换默认门限 |
 | `DATA_QUALITY_GUIDE.md` | 质量指标、风险门限和报告解读说明 |
 
 推荐流程不是“直接转换”，而是：
@@ -16,11 +20,33 @@
 1. 查看原始 Episode 和任务结果；
 2. 编写每条 Episode 的任务、裁剪和成功标注；
 3. 运行独立质量评估；
-4. 修正失败轨迹、异常时间戳或裁剪边界；
-5. 运行转换器 `--dry-run`；
-6. 正式生成 LeRobot 数据；
-7. 读取 LeRobot 数据集做最终抽样检查；
-8. 计算 OpenPI normalization stats 后再训练。
+4. 对时间戳清洗先运行 `--dry-run`，检查逐帧修正量和高风险帧；
+5. 写出清洗后的新 MCAP，原始 MCAP 不做原地修改；
+6. 对清洗数据重新运行质量评估；
+7. 运行转换器 `--dry-run`；
+8. 正式生成 LeRobot 数据；
+9. 读取 LeRobot 数据集做最终抽样检查；
+10. 计算 OpenPI normalization stats 后再训练。
+
+### 1.1 环境准备
+
+本仓库使用 Python 3.11 和 `uv` 管理依赖。首次运行或 `pyproject.toml` / `uv.lock` 更新后，在仓库根目录执行：
+
+```bash
+uv sync
+uv run python -c "import lerobot, torch, torchcodec; print(lerobot.__version__, torch.__version__)"
+```
+
+正式转换依赖 LeRobot、PyTorch、TorchCodec 和系统 FFmpeg。相关版本已经在 `pyproject.toml` 与 `uv.lock`
+中锁定；不要只在系统 Python 或 Conda `base` 环境中执行 `pip install lerobot`，否则 `uv run` 使用的项目
+虚拟环境仍可能找不到该模块。所有质检、清洗和转换命令都应从仓库根目录通过 `uv run` 执行。
+
+可用以下命令确认视频编码工具存在：
+
+```bash
+ffmpeg -version
+ffprobe -version
+```
 
 ## 2. 原始目录结构
 
@@ -125,12 +151,48 @@ right_gripper
 
 `success=false` 不会自动覆盖 `include`。如果失败轨迹不用于专门的负样本方法，应明确设置 `include=false`。
 
+### 4.1 头相机时间戳清洗
+
+清洗器不会直接转换为 LeRobot，也不会修改原始 MCAP。它按 MCAP 消息记录顺序保留 Header、publish time、
+log time，短异常段使用局部插值，长异常段使用鲁棒帧序号回归，并为每一帧记录修正量、修复方法和风险等级。
+
+先执行 dry-run：
+
+```bash
+uv run python -m data_process.clean_f1_mcap \
+  --raw-dir test_data/F1_data_SOP_openbox/ \
+  --output-dir artifacts/F1_data_SOP_openbox/cleaned_mcap \
+  --report-dir artifacts/F1_data_SOP_openbox/cleaning \
+  --dry-run
+```
+
+检查以下输出：
+
+```text
+artifacts/F1_data_SOP_openbox/cleaning/
+├── cleaning_report.json
+├── cleaning_report.md
+└── episodes/
+    ├── episode_000004/
+    │   ├── cleaning_report.json
+    │   └── timestamp_corrections.csv
+    └── episode_000006/
+        ├── cleaning_report.json
+        └── timestamp_corrections.csv
+```
+
+重点检查 `max_abs_correction_ms`、`warning_frame_count`、`high_risk_frame_count` 和
+`corrected_steps.anomaly_count`。高风险帧不会被静默删除，必须结合视频和动作数据人工复核。
+
+确认方案后去掉 `--dry-run`，清洗结果会写入 `--output-dir`。当前等长补丁模式只支持未压缩 Chunk 且
+Chunk/Data CRC 为 0 的 F1 MCAP；不满足条件时程序会拒绝写入，避免生成损坏文件。
+
 ## 5. 转换前先做独立质量评估
 
 单条 Episode：
 
 ```bash
-uv run examples/f1/analyze_f1_data_quality.py \
+uv run python -m data_process.analyze_f1_data_quality \
   --raw-dir test_data/F1_data_test/episode_000001 \
   --task "Open the cardboard box with both grippers." \
   --start-time-s 3.0 \
@@ -140,7 +202,7 @@ uv run examples/f1/analyze_f1_data_quality.py \
 批量评估：
 
 ```bash
-uv run examples/f1/analyze_f1_data_quality.py \
+uv run python -m data_process.analyze_f1_data_quality \
   --raw-dir test_data/F1_data_test \
   --episode-config examples/f1/episodes.local.json
 ```
@@ -172,7 +234,7 @@ artifacts/f1_quality_reports/<UTC时间>_<输入目录名>/
 ### 6.1 Dry-run
 
 ```bash
-uv run examples/f1/convert_f1_mcap_to_lerobot.py \
+uv run python -m data_process.convert_f1_mcap_to_lerobot \
   --raw-dir test_data/F1_data_test/episode_000001 \
   --repo-id your_name/f1_open_box \
   --task "Open the cardboard box with both grippers." \
@@ -200,7 +262,7 @@ Dry-run 会完成：
 确认 dry-run 和独立质检结果后，移除 `--dry-run`：
 
 ```bash
-uv run examples/f1/convert_f1_mcap_to_lerobot.py \
+uv run python -m data_process.convert_f1_mcap_to_lerobot \
   --raw-dir test_data/F1_data_test/episode_000001 \
   --repo-id your_name/f1_open_box \
   --task "Open the cardboard box with both grippers." \
@@ -222,7 +284,7 @@ $HF_LEROBOT_HOME/your_name/f1_open_box
 先 dry-run：
 
 ```bash
-uv run examples/f1/convert_f1_mcap_to_lerobot.py \
+uv run python -m data_process.convert_f1_mcap_to_lerobot \
   --raw-dir test_data/F1_data_test \
   --repo-id your_name/f1_multitask \
   --episode-config examples/f1/episodes.local.json \
@@ -232,7 +294,7 @@ uv run examples/f1/convert_f1_mcap_to_lerobot.py \
 正式转换：
 
 ```bash
-uv run examples/f1/convert_f1_mcap_to_lerobot.py \
+uv run python -m data_process.convert_f1_mcap_to_lerobot \
   --raw-dir test_data/F1_data_test \
   --repo-id your_name/f1_multitask \
   --episode-config examples/f1/episodes.local.json
@@ -327,7 +389,7 @@ artifacts/f1_conversion_reports/<UTC时间>_<repo_id>/
 | --- | ---: | --- |
 | `--fps` | 20 | LeRobot 输出频率 |
 | `--max-image-delta-ms` | 40 | 图像到目标时刻的最大允许误差 |
-| `--max-state-delta-ms` | 15 | 状态到目标时刻的最大允许误差 |
+| `--max-state-delta-ms` | 20 | 状态到目标时刻的最大允许误差；兼容约 30 Hz 状态流的半周期最近邻误差 |
 | `--max-action-delta-ms` | 60 | 动作到目标时刻的最大允许误差 |
 | `--max-action-step-deg` | 25 | 相邻输出动作的关节跳变告警门限 |
 | `--gripper-scale` | 100 | 归一化到 1.0 的原始夹爪值 |
@@ -401,4 +463,3 @@ delta_action_mask = transforms.make_bool_mask(14, -2)
 - 裁剪后是否还含初始化、人工接管、急停恢复和长空闲段；
 - 任务文本是否准确描述整条轨迹；
 - 训练、验证、测试是否按 Episode/采集 Session 划分，而不是随机拆帧。
-

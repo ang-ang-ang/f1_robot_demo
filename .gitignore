@@ -1,0 +1,6 @@
+f1p01_00000000_20260920/*
+test_data/*
+.venv/
+__pycache__/
+*.py[cod]
+artifacts/
