@@ -14,6 +14,9 @@
 | `mcap.py` | 按 MCAP 记录顺序读取 Header、publish time、log time 和 CDR 字节偏移 |
 | `default_config.toml` | 质检、时间戳清洗和转换默认门限 |
 | `DATA_QUALITY_GUIDE.md` | 质量指标、风险门限和报告解读说明 |
+| `analyze_f1_lerobot_operators.py` | 对 LeRobot 三相机曝光一致性和关节运动质量进行可组合分析 |
+| `operator_config.toml` | 曝光、关节限位/速度/加速度/单帧跳点默认门限 |
+| `QUALITY_OPERATORS.md` | 新增质量算子的算法、阈值依据、运行和扩展说明 |
 
 推荐流程不是“直接转换”，而是：
 
@@ -25,8 +28,9 @@
 6. 对清洗数据重新运行质量评估；
 7. 运行转换器 `--dry-run`；
 8. 正式生成 LeRobot 数据；
-9. 读取 LeRobot 数据集做最终抽样检查；
-10. 计算 OpenPI normalization stats 后再训练。
+9. 运行 LeRobot 曝光与关节质量算子；
+10. 读取 LeRobot 数据集做最终抽样检查；
+11. 计算 OpenPI normalization stats 后再训练。
 
 ### 1.1 环境准备
 

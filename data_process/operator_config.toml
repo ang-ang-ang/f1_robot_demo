@@ -1,0 +1,27 @@
+[exposure]
+clip_luminance = 0.98
+l50_ratio_threshold = 1.60
+l50_delta_threshold = 0.08
+l95_delta_threshold = 0.05
+clip_ratio_threshold = 0.05
+clip_excess_threshold = 0.03
+minimum_consecutive_frames = 3
+pixel_stride = 1
+
+[joint_motion.state]
+max_step_deg = 15.0
+fallback_max_velocity_deg_s = 300.0
+max_acceleration_deg_s2 = 5000.0
+
+[joint_motion.action]
+max_step_deg = 25.0
+fallback_max_velocity_deg_s = 500.0
+max_acceleration_deg_s2 = 5000.0
+
+[joint_motion]
+velocity_warning_ratio = 0.80
+acceleration_warning_ratio = 0.80
+position_limit_tolerance_deg = 0.10
+spike_min_step_deg = 5.0
+spike_recovery_deg = 1.0
+
