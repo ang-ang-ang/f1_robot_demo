@@ -1,0 +1,4 @@
+# Standalone MCAP joint plots; Python 3.11/3.12, without the LeRobot training stack.
+numpy==1.26.4
+matplotlib==3.10.8
+opencv-python-headless>=4.10,<5
