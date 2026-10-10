@@ -426,7 +426,12 @@ def clean_dataset(
                 "topic": config.head_timestamp.topic,
                 "diagnostics": repair.diagnostics,
                 "report_dir": str(episode_report_dir),
+                "timestamp_corrections": "f1_timestamp_corrections.csv",
             }
+            shutil.copy2(
+                episode_report_dir / "timestamp_corrections.csv",
+                destination / "f1_timestamp_corrections.csv",
+            )
             (destination / "f1_cleaning_manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
         episode_reports.append(episode_report)
 

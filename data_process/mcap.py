@@ -27,6 +27,25 @@ class ImageReference:
     frame_id: str
 
 
+@dataclasses.dataclass(frozen=True)
+class McapSchemaInfo:
+    source_path: Path
+    schema_id: int
+    name: str
+    encoding: str
+    data: bytes
+
+
+@dataclasses.dataclass(frozen=True)
+class McapChannelInfo:
+    source_path: Path
+    channel_id: int
+    schema_id: int
+    topic: str
+    message_encoding: str
+    metadata: dict[str, str]
+
+
 @dataclasses.dataclass
 class MessageSample:
     source_path: Path
@@ -34,6 +53,7 @@ class MessageSample:
     topic_index: int
     topic: str
     schema_name: str | None
+    channel_id: int
     sequence: int
     log_time_ns: int
     publish_time_ns: int
@@ -68,6 +88,8 @@ class EpisodeData:
     root: Path
     source_files: list[Path]
     topics: dict[str, list[MessageSample]] = dataclasses.field(default_factory=dict)
+    schemas: dict[tuple[Path, int], McapSchemaInfo] = dataclasses.field(default_factory=dict)
+    channels: dict[tuple[Path, int], McapChannelInfo] = dataclasses.field(default_factory=dict)
     chunks: list[McapChunkInfo] = dataclasses.field(default_factory=list)
     data_section_crcs: dict[Path, int] = dataclasses.field(default_factory=dict)
     message_count: int = 0
@@ -111,6 +133,21 @@ def _read_blob64(buffer: bytes | memoryview, position: int) -> tuple[memoryview,
     length, position = _read_u64(buffer, position)
     data_position = position
     return memoryview(buffer)[position : position + length], position + length, data_position
+
+
+def _read_map(buffer: bytes | memoryview, position: int) -> tuple[dict[str, str], int]:
+    length, position = _read_u32(buffer, position)
+    end = position + length
+    if end > len(buffer):
+        raise ValueError("MCAP map exceeds its record")
+    result: dict[str, str] = {}
+    while position < end:
+        key, position = _read_string(buffer, position)
+        value, position = _read_string(buffer, position)
+        result[key] = value
+    if position != end:
+        raise ValueError("MCAP map has trailing bytes")
+    return result, position
 
 
 def _iter_records(buffer: bytes | memoryview) -> Iterator[tuple[int, memoryview, int]]:
@@ -199,8 +236,8 @@ def _decode_known_message(sample: MessageSample, cdr: memoryview) -> None:
 
 
 def _read_mcap(path: Path, episode: EpisodeData, record_index: int) -> int:
-    schemas: dict[int, str] = {}
-    channels: dict[int, tuple[int, str]] = {}
+    schemas: dict[int, McapSchemaInfo] = {}
+    channels: dict[int, McapChannelInfo] = {}
     topic_counts = {topic: len(samples) for topic, samples in episode.topics.items()}
     with path.open("rb") as handle:
         if handle.read(8) != MCAP_MAGIC:
@@ -256,17 +293,39 @@ def _read_mcap(path: Path, episode: EpisodeData, record_index: int) -> int:
                     schema_position = 0
                     schema_id, schema_position = _read_u16(data, schema_position)
                     schema_name, schema_position = _read_string(data, schema_position)
-                    _, schema_position = _read_string(data, schema_position)
-                    _, schema_position = _read_blob32(data, schema_position)
-                    schemas[schema_id] = schema_name
+                    schema_encoding, schema_position = _read_string(data, schema_position)
+                    schema_data, schema_position = _read_blob32(data, schema_position)
+                    if schema_position != len(data):
+                        raise ValueError(f"Unexpected bytes after schema {schema_id} in {path}")
+                    schema = McapSchemaInfo(
+                        source_path=path,
+                        schema_id=schema_id,
+                        name=schema_name,
+                        encoding=schema_encoding,
+                        data=schema_data,
+                    )
+                    schemas[schema_id] = schema
+                    episode.schemas[(path, schema_id)] = schema
                     continue
                 if inner_opcode == MCAP_CHANNEL:
                     channel_position = 0
                     channel_id, channel_position = _read_u16(data, channel_position)
                     schema_id, channel_position = _read_u16(data, channel_position)
                     topic, channel_position = _read_string(data, channel_position)
-                    _, channel_position = _read_string(data, channel_position)
-                    channels[channel_id] = (schema_id, topic)
+                    message_encoding, channel_position = _read_string(data, channel_position)
+                    metadata, channel_position = _read_map(data, channel_position)
+                    if channel_position != len(data):
+                        raise ValueError(f"Unexpected bytes after channel {channel_id} in {path}")
+                    channel = McapChannelInfo(
+                        source_path=path,
+                        channel_id=channel_id,
+                        schema_id=schema_id,
+                        topic=topic,
+                        message_encoding=message_encoding,
+                        metadata=metadata,
+                    )
+                    channels[channel_id] = channel
+                    episode.channels[(path, channel_id)] = channel
                     continue
                 if inner_opcode != MCAP_MESSAGE:
                     continue
@@ -274,7 +333,9 @@ def _read_mcap(path: Path, episode: EpisodeData, record_index: int) -> int:
                 channel_id = struct.unpack_from("<H", data, 0)[0]
                 if channel_id not in channels:
                     raise ValueError(f"Message references unknown channel {channel_id} in {path}")
-                schema_id, topic = channels[channel_id]
+                channel = channels[channel_id]
+                schema = schemas.get(channel.schema_id)
+                topic = channel.topic
                 topic_index = topic_counts.get(topic, 0)
                 topic_counts[topic] = topic_index + 1
                 cdr_file_offset = records_file_offset + data_position + 22
@@ -283,7 +344,8 @@ def _read_mcap(path: Path, episode: EpisodeData, record_index: int) -> int:
                     record_index=record_index,
                     topic_index=topic_index,
                     topic=topic,
-                    schema_name=schemas.get(schema_id),
+                    schema_name=None if schema is None else schema.name,
+                    channel_id=channel_id,
                     sequence=struct.unpack_from("<I", data, 2)[0],
                     log_time_ns=struct.unpack_from("<Q", data, 6)[0],
                     publish_time_ns=struct.unpack_from("<Q", data, 14)[0],
@@ -339,4 +401,13 @@ def read_image_bytes(reference: ImageReference, handles: dict[Path, BinaryIO]) -
     payload = handle.read(reference.size)
     if len(payload) != reference.size:
         raise ValueError(f"Truncated image payload in {reference.path}")
+    return payload
+
+
+def read_message_bytes(sample: MessageSample, handles: dict[Path, BinaryIO]) -> bytes:
+    handle = handles[sample.source_path]
+    handle.seek(sample.cdr_file_offset)
+    payload = handle.read(sample.cdr_size)
+    if len(payload) != sample.cdr_size:
+        raise ValueError(f"Truncated message payload in {sample.source_path}")
     return payload

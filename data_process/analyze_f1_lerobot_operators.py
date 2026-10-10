@@ -12,7 +12,7 @@ from typing import Any
 
 import tyro
 
-from data_process.exposure_operator import CrossCameraExposureOperator
+from data_process.exposure_operator import IndependentCameraExposureOperator
 from data_process.joint_motion_operator import JointMotionOperator
 from data_process.quality_operator import run_episode_operators
 from data_process.quality_operator_config import load_operator_config, operator_config_to_dict
@@ -48,6 +48,9 @@ class Args:
     max_frames: int | None = None
     """仅处理每条 Episode 的前 N 帧，适合快速验证；正式报告应留空。"""
 
+    write_exposure_mask_videos: bool = False
+    """为每路相机输出红色过曝叠加图与二值 Mask 并排的校验视频。"""
+
 
 def _new_run_dir(args: Args) -> Path:
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -72,10 +75,16 @@ def _episode_indices(dataset_root: Path, requested: list[int]) -> list[int]:
     return sorted(set(selected))
 
 
-def _operators(args: Args, config):
+def _operators(args: Args, config, episode_dir: Path):
     operators = []
     if args.run_exposure:
-        operators.append(CrossCameraExposureOperator(CAMERA_KEYS, config.exposure))
+        operators.append(
+            IndependentCameraExposureOperator(
+                CAMERA_KEYS,
+                config.exposure,
+                mask_output_dir=episode_dir / "exposure_masks" if args.write_exposure_mask_videos else None,
+            )
+        )
     if args.run_joint_state:
         operators.append(
             JointMotionOperator(
@@ -112,9 +121,10 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def _write_episode_outputs(episode_dir: Path, episode: dict[str, Any]) -> None:
     operators = episode["operators"]
-    exposure = operators.get("cross_camera_exposure")
+    exposure = operators.get(IndependentCameraExposureOperator.name)
     if exposure is not None:
         _write_csv(episode_dir / "exposure_frames.csv", exposure["frames"])
+        _write_csv(episode_dir / "exposure_segments.csv", exposure["confirmed_segments"])
     for name, result in operators.items():
         if name.startswith("joint_motion_"):
             _write_csv(episode_dir / f"{name}_events.csv", result["events"])
@@ -162,7 +172,7 @@ def _markdown(report: dict[str, Any]) -> str:
     ]
     for episode in report["episodes"]:
         operators = episode["operators"]
-        exposure = operators.get("cross_camera_exposure")
+        exposure = operators.get(IndependentCameraExposureOperator.name)
         state = operators.get("joint_motion_state")
         action = operators.get("joint_motion_action")
         exposure_text = "未运行" if exposure is None else f"{exposure['status']}/{exposure['confirmed_segment_count']}"
@@ -183,14 +193,14 @@ def _markdown(report: dict[str, Any]) -> str:
     for episode in report["episodes"]:
         lines.extend(["", f"## Episode {episode['episode_index']} 明细", ""])
         operators = episode["operators"]
-        exposure = operators.get("cross_camera_exposure")
+        exposure = operators.get(IndependentCameraExposureOperator.name)
         if exposure is not None:
             lines.extend(
                 [
                     "### 曝光异常片段",
                     "",
-                    "| 相机 | 起止帧 | 起止时间 (s) | 帧数 | 最大 L50 比值 | 最大截断比例 |",
-                    "| --- | ---: | ---: | ---: | ---: | ---: |",
+                    "| 相机 | 起止帧 | 起止时间 (s) | 帧数 | 最大 L50 | 最大 L95 | 最大截断比例 |",
+                    "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
                 ]
             )
             if exposure["confirmed_segments"]:
@@ -198,10 +208,11 @@ def _markdown(report: dict[str, Any]) -> str:
                     lines.append(
                         f"| `{segment['camera']}` | {segment['start_frame']}–{segment['end_frame']} | "
                         f"{segment['start_time_s']:.3f}–{segment['end_time_s']:.3f} | {segment['frame_count']} | "
-                        f"{segment['max_l50_ratio']:.3f} | {segment['max_highlight_clipping_ratio']:.3%} |"
+                        f"{segment['max_l50']:.3f} | {segment['max_l95']:.3f} | "
+                        f"{segment['max_highlight_clipping_ratio']:.3%} |"
                     )
             else:
-                lines.append("| 无 | - | - | - | - | - |")
+                lines.append("| 无 | - | - | - | - | - | - |")
 
         for name, title in (("joint_motion_state", "State"), ("joint_motion_action", "Action")):
             result = operators.get(name)
@@ -229,8 +240,9 @@ def _markdown(report: dict[str, Any]) -> str:
             "## 解释与限制",
             "",
             "- 曝光指标先按标准 sRGB 逆传递函数线性化，再计算 Rec.709 亮度；不是直接对 JPEG 灰度求均值。",
-            "- 跨相机异常必须同时满足亮度差/比例或高光截断条件，并持续达到最小帧数；单帧候选仍保留在 CSV。",
-            "- 三个相机视场不同，白色物体占比也会不同，因此该算子是数据风险筛查，不替代人工查看异常片段。",
+            "- 三路相机分别使用绝对 L50/L95 和高光截断比例判定，不使用其他相机作为亮度基线。",
+            "- 异常必须持续达到最小帧数；单帧候选仍保留在 CSV。绝对阈值仍需结合相机曝光策略校准。",
+            "- `--write-exposure-mask-videos` 输出红色截断区域叠加和二值 Mask，便于人工校验异常区域。",
             "- 位置限位来自 URDF；当前 F1 URDF 的 velocity 为 0，报告中的速度上限是 TOML 临时值，不是已确认硬件规格。",
             "- 加速度上限同样是可调工程门限。取得控制器真实 max_velocity/max_acceleration 后必须更新配置。",
             "- `single_frame_spike` 要求进入和退出步长都大、前后帧又恢复接近，可区分孤立跳点和持续真实运动。",
@@ -239,6 +251,8 @@ def _markdown(report: dict[str, Any]) -> str:
             "",
             "- `quality_report.json`：完整机器可读汇总。",
             "- `episodes/*/exposure_frames.csv`：逐帧、逐相机亮度与候选/确认标记。",
+            "- `episodes/*/exposure_segments.csv`：独立相机确认异常片段。",
+            "- `episodes/*/exposure_masks/*.mp4`：可选逐路过曝区域校验视频。",
             "- `episodes/*/joint_motion_*_distributions.csv`：逐关节步长、速度、加速度分位数。",
             "- `episodes/*/joint_motion_*_events.csv`：逐个限位、跳变、超速、超加速度和单帧尖峰事件。",
         ]
@@ -254,18 +268,18 @@ def main(args: Args) -> None:
     try:
         for episode_index in indices:
             print(f"分析 LeRobot episode_{episode_index:06d} ...")
+            episode_dir = run_dir / "episodes" / f"episode_{episode_index:06d}"
+            episode_dir.mkdir(parents=True)
             episode = run_episode_operators(
                 args.dataset_root,
                 episode_index,
-                _operators(args, config),
+                _operators(args, config, episode_dir),
                 max_frames=args.max_frames,
             )
-            episode_dir = run_dir / "episodes" / f"episode_{episode_index:06d}"
-            episode_dir.mkdir(parents=True)
             _write_episode_outputs(episode_dir, episode)
             episodes.append(episode)
         report = {
-            "format": "f1_lerobot_quality_operators_v1",
+            "format": "f1_lerobot_quality_operators_v2",
             "created_at_utc": datetime.now(UTC).isoformat(),
             "dataset_root": str(args.dataset_root),
             "run_dir": str(run_dir),
@@ -277,6 +291,7 @@ def main(args: Args) -> None:
                 "run_joint_action": args.run_joint_action,
                 "joint_limit_urdf": str(args.joint_limit_urdf) if args.joint_limit_urdf else None,
                 "max_frames": args.max_frames,
+                "write_exposure_mask_videos": args.write_exposure_mask_videos,
             },
             "summary": {
                 "status": _status(episodes),

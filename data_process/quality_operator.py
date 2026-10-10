@@ -22,6 +22,10 @@ class EpisodeMetadata:
     image_keys: tuple[str, ...]
     numeric_keys: tuple[str, ...]
     feature_names: Mapping[str, tuple[str, ...]]
+    episode_name: str | None = None
+    source_type: str = "unknown"
+    source_files: tuple[str, ...] = ()
+    source_details: Mapping[str, Any] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -31,6 +35,17 @@ class FrameContext:
     timestamp_s: float
     images_bgr: Mapping[str, np.ndarray]
     numeric: Mapping[str, np.ndarray]
+    provenance: Mapping[str, Mapping[str, Any]] = dataclasses.field(default_factory=dict)
+
+
+class StreamingFrameSource(Protocol):
+    metadata: EpisodeMetadata
+
+    def frames(self) -> Iterator[FrameContext]:
+        """Yield synchronized frames for one episode."""
+
+    def close(self) -> None:
+        """Release source resources."""
 
 
 class StreamingQualityOperator(Protocol):
@@ -90,6 +105,8 @@ class LeRobotEpisodeSource:
             image_keys=self.image_keys,
             numeric_keys=self.numeric_keys,
             feature_names=feature_names,
+            episode_name=f"episode_{episode_index:06d}",
+            source_type="lerobot",
         )
 
     def _validate_keys(self) -> None:
@@ -193,6 +210,15 @@ def run_episode_operators(
         numeric_keys=sorted(numeric_keys),
         max_frames=max_frames,
     )
+    return run_streaming_operators(source, operators)
+
+
+def run_streaming_operators(
+    source: StreamingFrameSource,
+    operators: Sequence[StreamingQualityOperator],
+) -> dict[str, Any]:
+    """Run operators over any synchronized streaming frame source."""
+
     for operator in operators:
         operator.start(source.metadata)
     try:
@@ -201,9 +227,14 @@ def run_episode_operators(
                 operator.process(frame)
     finally:
         source.close()
+    metadata = source.metadata
     return {
-        "episode_index": episode_index,
+        "episode_index": metadata.episode_index,
+        "episode_name": metadata.episode_name,
         "frame_count": source.metadata.frame_count,
         "fps": source.metadata.fps,
+        "source_type": metadata.source_type,
+        "source_files": list(metadata.source_files),
+        "source_details": dict(metadata.source_details),
         "operators": {operator.name: operator.finish() for operator in operators},
     }

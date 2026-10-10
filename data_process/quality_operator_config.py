@@ -12,11 +12,9 @@ from typing import Any
 @dataclasses.dataclass(frozen=True)
 class ExposureOperatorConfig:
     clip_luminance: float
-    l50_ratio_threshold: float
-    l50_delta_threshold: float
-    l95_delta_threshold: float
+    overexposed_l50_threshold: float
+    overexposed_l95_threshold: float
     clip_ratio_threshold: float
-    clip_excess_threshold: float
     minimum_consecutive_frames: int
     pixel_stride: int
 
@@ -60,16 +58,15 @@ def _validate(config: QualityOperatorConfig) -> None:
     exposure = config.exposure
     unit_interval = {
         "clip_luminance": exposure.clip_luminance,
-        "l50_delta_threshold": exposure.l50_delta_threshold,
-        "l95_delta_threshold": exposure.l95_delta_threshold,
+        "overexposed_l50_threshold": exposure.overexposed_l50_threshold,
+        "overexposed_l95_threshold": exposure.overexposed_l95_threshold,
         "clip_ratio_threshold": exposure.clip_ratio_threshold,
-        "clip_excess_threshold": exposure.clip_excess_threshold,
     }
     for name, value in unit_interval.items():
         if not 0.0 <= value <= 1.0:
             raise ValueError(f"exposure.{name} must be in [0, 1], got {value}")
-    if exposure.l50_ratio_threshold <= 1.0:
-        raise ValueError("exposure.l50_ratio_threshold must be greater than 1")
+    if exposure.overexposed_l95_threshold < exposure.overexposed_l50_threshold:
+        raise ValueError("exposure.overexposed_l95_threshold must not be below overexposed_l50_threshold")
     if exposure.minimum_consecutive_frames < 1 or exposure.pixel_stride < 1:
         raise ValueError("exposure frame count and pixel stride must be positive")
 

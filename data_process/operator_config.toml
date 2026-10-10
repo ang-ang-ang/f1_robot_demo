@@ -1,10 +1,8 @@
 [exposure]
 clip_luminance = 0.98
-l50_ratio_threshold = 1.60
-l50_delta_threshold = 0.08
-l95_delta_threshold = 0.05
+overexposed_l50_threshold = 0.40
+overexposed_l95_threshold = 0.90
 clip_ratio_threshold = 0.05
-clip_excess_threshold = 0.03
 minimum_consecutive_frames = 3
 pixel_stride = 1
 
@@ -24,4 +22,3 @@ acceleration_warning_ratio = 0.80
 position_limit_tolerance_deg = 0.10
 spike_min_step_deg = 5.0
 spike_recovery_deg = 1.0
-

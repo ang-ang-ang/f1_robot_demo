@@ -17,9 +17,17 @@
 | `README_JOINT_STATE_JUMPS.md` | 关节跳变检测、可视化、保守修复、报告解读和训练准入说明 |
 | `requirements-plot.txt` | 独立绘图环境的 NumPy / Matplotlib / OpenCV 依赖，不需安装训练依赖 |
 | `mcap.py` | 按 MCAP 记录顺序读取 Header、publish time、log time 和 CDR 字节偏移 |
+| `mcap_writer.py` | 无损复制 ROS 2 CDR payload，并写出未压缩 Chunk MCAP 和 JSON 诊断话题 |
+| `resample_f1_mcap.py` | 清洗后 MCAP 的固定频率映射、派生 MCAP 和 Foxglove 诊断入口 |
+| `resampling.py` | 公共时间轴、最近邻映射、原始/清洗/目标时间 lineage 和 MCAP 写出 |
+| `analyze_f1_resampling.py` | 周期 Gap、流内残差、流间偏差和可视化分析入口 |
+| `resampling_analysis.py` | JSON/Markdown/CSV 统计与 PNG 图生成 |
 | `default_config.toml` | 质检、时间戳清洗和转换默认门限 |
 | `DATA_QUALITY_GUIDE.md` | 质量指标、风险门限和报告解读说明 |
-| `analyze_f1_lerobot_operators.py` | 对 LeRobot 三相机曝光一致性和关节运动质量进行可组合分析 |
+| `analyze_f1_mcap_exposure.py` | 直接对原始 MCAP 三路图像分别运行曝光检测并保存原始帧定位信息 |
+| `analyze_f1_lerobot_operators.py` | 对 LeRobot 逐相机曝光和关节运动质量进行可组合分析 |
+| `mcap_quality_source.py` | 原始 MCAP 三路图像独立遍历、JPEG 解码和逐帧来源追踪适配器 |
+| `exposure_operator.py` | MCAP/LeRobot 共用的独立曝光检测和过曝 Mask 可视化算法 |
 | `operator_config.toml` | 曝光、关节限位/速度/加速度/单帧跳点默认门限 |
 | `QUALITY_OPERATORS.md` | 可组合质量算子的算法、阈值依据、运行与扩展说明 |
 
@@ -27,15 +35,18 @@
 
 1. 查看原始 Episode 和任务结果；
 2. 编写每条 Episode 的任务、裁剪和成功标注；
-3. 运行独立质量评估；
-4. 对时间戳清洗先运行 `--dry-run`，检查逐帧修正量和高风险帧；
-5. 写出清洗后的新 MCAP，原始 MCAP 不做原地修改；
-6. 对清洗数据重新运行质量评估；
-7. 运行转换器 `--dry-run`；
-8. 正式生成 LeRobot 数据；
-9. 运行 LeRobot 曝光与关节质量算子；
-10. 读取 LeRobot 数据集做最终抽样检查；
-11. 计算 OpenPI normalization stats 后再训练。
+3. 运行原始时序/关节质量评估；
+4. 直接对原始 MCAP 运行三相机曝光算子，保留异常图像的原始 Topic 索引和时间戳；
+5. 对时间戳清洗先运行 `--dry-run`，检查逐帧修正量和高风险帧；
+6. 写出清洗后的新 MCAP，原始 MCAP 不做原地修改；
+7. 对清洗数据重新运行质量评估和原始 MCAP 曝光算子；
+8. 生成 20 Hz 映射和派生 MCAP，分析周期 Gap、流内残差和流间偏差；
+9. 用 Foxglove 或静态图定位时间误差尖峰；
+10. 运行转换器 `--dry-run`；
+11. 正式生成 LeRobot 数据；
+12. 运行 LeRobot 曝光与关节质量算子，比较转换前后结果；
+13. 读取 LeRobot 数据集做最终抽样检查；
+14. 计算 OpenPI normalization stats 后再训练。
 
 ### 1.1 环境准备
 
@@ -458,6 +469,95 @@ uv run python -m data_process.analyze_f1_lerobot_operators \
 速度与加速度默认仍是待硬件确认的工程阈值，不能代替控制器规格。本次确认了这些上游文件完整合入并通过语法编译；
 当前验证环境缺少 `pyarrow`、`tyro`，未对 LeRobot 质量算子执行端到端数据验证。
 
+
+新生成的清洗 Episode 会同时包含 `f1_cleaning_manifest.json` 和 `f1_timestamp_corrections.csv`，后者用于
+恢复每帧的原始 Header、清洗后 Header、修正方法和风险等级。不要只复制清洗后的 MCAP 而丢失这两个文件。
+
+### 4.4 固定 20 Hz 映射和派生 MCAP
+
+建议先只生成映射，确认公共时间区间、残差和输出体积：
+
+```bash
+uv run python -m data_process.resample_f1_mcap \
+  --raw-dir artifacts/F1_data_SOP_openbox/cleaned_mcap \
+  --output-dir artifacts/F1_data_SOP_openbox/resampled_20hz \
+  --mapping-only
+```
+
+检查通过后去掉 `--mapping-only`，每个 Episode 会输出：
+
+```text
+episode_000004/
+├── aligned_20hz.mcap
+└── resampling_mapping.json
+```
+
+`resampling_mapping.json` 是时间 lineage 的审计真值：
+
+- `source_samples` 保存源消息的 record index、sequence、原始 Header、清洗后 Header、publish/log、修复方法和风险；
+- `target_mappings` 保存每个 20 Hz 目标时刻选择的 `source_index`、`cleaned-target` 和 `original-target` 有符号残差；
+- `selected_unique_source_indices` 保存真正参与输出的源消息；
+- `reused_target_count` 统计连续目标时刻复用同一源消息的次数；
+- `omitted_source_count` 统计降采样后未被选择的源消息。
+
+默认 `--mcap-mode aligned` 会在每个目标时刻为每个流写一条消息：MCAP envelope 的 `log_time/publish_time`
+改为严格的目标时间，但 CDR payload 内的 ROS `header.stamp` 保留清洗后的源时间。该模式适合固定频率回放和
+Foxglove 排查；稀疏流可能复用 payload，复用信息会进入映射和诊断话题。
+
+如果只希望保留唯一选中的原消息，并保持原始 envelope 时间：
+
+```bash
+uv run python -m data_process.resample_f1_mcap \
+  --raw-dir artifacts/F1_data_SOP_openbox/cleaned_mcap \
+  --output-dir artifacts/F1_data_SOP_openbox/resampled_unique \
+  --mcap-mode unique
+```
+
+该模式输出 `selected_unique.mcap`，不会伪造低频流，因此不保证每个 Topic 都严格达到 20 Hz。
+
+分析映射 JSON：
+
+```bash
+uv run python -m data_process.analyze_f1_resampling \
+  --input-path artifacts/F1_data_SOP_openbox/resampled_20hz \
+  --output-dir artifacts/F1_data_SOP_openbox/resampling_analysis
+```
+
+输出包括：
+
+- `resampling_statistics.json/.md`：逐 Episode、逐流和所有流对的详细统计；
+- `stream_statistics.csv`：原始/清洗周期、Gap、重采样残差、复用率和丢弃率；
+- `pairwise_statistics.csv`：所有流对的有符号中位数、绝对 P95/P99 和最大偏差；
+- `gap_events.csv`：超过 `1.5T` 的周期 Gap 位置、倍数和风险；
+- `residual_timeline.png`、`residual_histogram.png`、`gap_timeline.png` 和 `camera_pairwise_skew.png`。
+
+核心定义：
+
+```text
+residual = cleaned_source_time - target_time
+pairwise_skew(A, B) = selected_time(A) - selected_time(B)
+```
+
+残差为负表示选择历史样本，为正表示离线最近邻选择了未来样本。流间偏差描述被选中时间戳之间的差异，
+不能证明相机在硬件层面同时曝光。
+
+`aligned_20hz.mcap` 还会加入 `/f1/resampling/<stream_slug>` 和 `/f1/resampling/cross_stream` JSON 诊断话题。
+在 Foxglove 中增加三路 Image 面板、一个 Plot 面板和一个 State Transitions 面板；Plot 的 Timestamp 选择
+`Log time`，然后绘制例如：
+
+```text
+/f1/resampling/camera_head_color_image_raw_compressed.residual_ms
+/f1/resampling/camera_left_wrist_color_image_raw_compressed.residual_ms
+/f1/resampling/cross_stream.camera_head_color_image_raw_compressed__camera_left_wrist_color_image_raw_compressed_ms
+```
+
+State Transitions 可查看 `risk`、`repair_method` 和 `reused_previous_source`。点击 Plot 尖峰可跳到对应播放时间，
+同时检查三路图像。Foxglove 参考：
+
+- Plot：<https://docs.foxglove.dev/docs/visualization/panels/plot>
+- State Transitions：<https://docs.foxglove.dev/docs/visualization/panels/state-transitions>
+- JSON Schema：<https://docs.foxglove.dev/docs/getting-started/custom/custom-schema-encodings>
+- 
 ## 5. 转换前先做独立质量评估
 
 单条 Episode：
